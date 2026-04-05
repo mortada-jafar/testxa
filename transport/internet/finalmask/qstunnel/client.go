@@ -54,7 +54,6 @@ type qstunnelConnClient struct {
 	chunkLen         int
 	clientIDBytes    []byte
 	myPublicIP       string
-	mode             string
 
 	// State
 	dataOffset     int
@@ -101,12 +100,9 @@ func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 		sendSockCount = 64
 	}
 
-	// Generate client ID for n-1 mode
-	var clientIDBytes []byte
-	if c.Mode == "n-1" || c.Mode == "" {
-		n, _ := rand.Int(rand.Reader, big.NewInt(1<<(5*clientIDWidth)))
-		clientIDBytes = numberToBase32Lower(int(n.Int64()), clientIDWidth)
-	}
+	// Generate random client ID to distinguish clients on the server
+	n, _ := rand.Int(rand.Reader, big.NewInt(1<<(5*clientIDWidth)))
+	clientIDBytes := numberToBase32Lower(int(n.Int64()), clientIDWidth)
 
 	qnameEncoded := encodeQName([]byte(c.Domain))
 
@@ -170,7 +166,6 @@ func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 		chunkLen:      chunkLen,
 		clientIDBytes: clientIDBytes,
 		myPublicIP:    myPublicIP,
-		mode:          c.Mode,
 		dataOffset:    int(initOffset.Int64()),
 		queryID:       uint16(initQID.Int64()),
 		readQueue:     make(chan *packet, 512),

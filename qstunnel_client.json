@@ -1,0 +1,88 @@
+{
+    "log": {
+        "loglevel": "debug"
+    },
+    "inbounds": [
+        {
+            "listen": "127.0.0.1",
+            "port": 10808,
+            "protocol": "socks",
+            "settings": {
+                "auth": "noauth",
+                "udp": true
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": ["http", "tls"]
+            },
+            "tag": "socks"
+        }
+    ],
+    "outbounds": [
+        {
+            "tag": "proxy",
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "1.1.1.1",
+                        "port": 53,
+                        "users": [
+                            {
+                                "id": "18947b04-60a2-4a39-b880-5fbab17b84b2",
+                                "encryption": "none"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "kcp",
+                "kcpSettings": {
+                    "mtu": 35,
+                    "tti": 200,
+                    "uplinkCapacity": 10,
+                    "downlinkCapacity": 50,
+                    "readBufferSize": 10,
+                    "writeBufferSize": 10
+                },
+                "finalmask": {
+                    "udp": [
+                        {
+                            "type": "qstunnel",
+                            "settings": {
+                                "domain": "t.psss.ir",
+                                "dnsIps": ["1.1.1.1"],
+                                "fakeSendIp": "4.2.2.4",
+                                "fakeSendPort": 443,
+                                "maxDomainLen": 99,
+                                "maxSubLen": 63,
+                                "retries": 1,
+                                "sendSockCount": 64,
+                                "myPublicIp": "auto"
+                            }
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "protocol": "freedom",
+            "tag": "direct"
+        },
+        {
+            "protocol": "blackhole",
+            "tag": "block"
+        }
+    ],
+    "routing": {
+        "domainStrategy": "AsIs",
+        "rules": [
+            {
+                "type": "field",
+                "ip": ["geoip:private"],
+                "outboundTag": "direct"
+            }
+        ]
+    }
+}

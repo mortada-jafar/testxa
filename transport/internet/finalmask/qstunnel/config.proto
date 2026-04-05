@@ -7,8 +7,6 @@ option java_package = "com.xray.transport.internet.finalmask.qstunnel";
 option java_multiple_files = true;
 
 message Config {
-  string mode = 1;                    // "1-1" or "n-1"
-
   // Client-side fields
   string domain = 2;                  // DNS domain suffix for queries
   repeated string dns_ips = 3;        // DNS server IPs to send queries to

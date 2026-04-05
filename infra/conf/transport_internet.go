@@ -1641,7 +1641,6 @@ func (c *Xicmp) Build() (proto.Message, error) {
 }
 
 type QSTunnel struct {
-	Mode          string   `json:"mode"`
 	Domain        string   `json:"domain"`
 	DnsIps        []string `json:"dnsIps"`
 	FakeSendIp    string   `json:"fakeSendIp"`
@@ -1657,7 +1656,6 @@ type QSTunnel struct {
 
 func (c *QSTunnel) Build() (proto.Message, error) {
 	return &qstunnel.Config{
-		Mode:          c.Mode,
 		Domain:        c.Domain,
 		DnsIps:        c.DnsIps,
 		FakeSendIp:    c.FakeSendIp,

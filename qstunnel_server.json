@@ -5,7 +5,7 @@
     "inbounds": [
         {
             "listen": "0.0.0.0",
-            "port": 443,
+            "port": 53,
             "protocol": "vless",
             "settings": {
                 "clients": [
@@ -31,9 +31,7 @@
                         {
                             "type": "qstunnel",
                             "settings": {
-                                "mode": "n-1",
-                                "receivePort": 5353,
-                                "recvDomains": ["t.local.test"]
+                                "recvDomains": ["t.psss.ir"]
                             }
                         }
                     ]

@@ -23,7 +23,6 @@ const (
 
 type Config struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	Mode  string                 `protobuf:"bytes,1,opt,name=mode,proto3" json:"mode,omitempty"` // "1-1" or "n-1"
 	// Client-side fields
 	Domain        string   `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"`                                       // DNS domain suffix for queries
 	DnsIps        []string `protobuf:"bytes,3,rep,name=dns_ips,json=dnsIps,proto3" json:"dns_ips,omitempty"`                         // DNS server IPs to send queries to
@@ -69,13 +68,6 @@ func (x *Config) ProtoReflect() protoreflect.Message {
 // Deprecated: Use Config.ProtoReflect.Descriptor instead.
 func (*Config) Descriptor() ([]byte, []int) {
 	return file_transport_internet_finalmask_qstunnel_config_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *Config) GetMode() string {
-	if x != nil {
-		return x.Mode
-	}
-	return ""
 }
 
 func (x *Config) GetDomain() string {
@@ -159,9 +151,8 @@ var File_transport_internet_finalmask_qstunnel_config_proto protoreflect.FileDes
 
 const file_transport_internet_finalmask_qstunnel_config_proto_rawDesc = "" +
 	"\n" +
-	"2transport/internet/finalmask/qstunnel/config.proto\x12*xray.transport.internet.finalmask.qstunnel\"\x85\x03\n" +
-	"\x06Config\x12\x12\n" +
-	"\x04mode\x18\x01 \x01(\tR\x04mode\x12\x16\n" +
+	"2transport/internet/finalmask/qstunnel/config.proto\x12*xray.transport.internet.finalmask.qstunnel\"\xf1\x02\n" +
+	"\x06Config\x12\x16\n" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\x12\x17\n" +
 	"\adns_ips\x18\x03 \x03(\tR\x06dnsIps\x12 \n" +
 	"\ffake_send_ip\x18\x04 \x01(\tR\n" +

@@ -40,8 +40,8 @@ type clientState struct {
 type qstunnelConnServer struct {
 	conn net.PacketConn // original raw conn, kept for lifecycle
 
-	recvSock   *net.UDPConn // listens for DNS queries
-	rawSockFd  int          // raw socket for IP spoofing
+	recvSock   net.PacketConn // listens for DNS queries (reuses KCP's socket)
+	rawSockFd  int            // raw socket for IP spoofing
 	ipID       uint16
 
 	recvDomains [][]string // parsed domain label lists (lowercased)
@@ -59,27 +59,13 @@ func NewConnServer(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 		return nil, errors.New("qstunnel requires being at the outermost level")
 	}
 
-	receivePort := int(c.ReceivePort)
-	if receivePort == 0 {
-		receivePort = 53
-	}
-
-	// Listen for DNS queries
-	recvAddr := &net.UDPAddr{IP: net.IPv4zero, Port: receivePort}
-	recvConn, err := net.ListenUDP("udp4", recvAddr)
-	if err != nil {
-		return nil, errors.New("failed to listen on port ", receivePort).Base(err)
-	}
-
 	// Create raw socket for IP spoofing
 	rawFd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_UDP)
 	if err != nil {
-		recvConn.Close()
 		return nil, errors.New("failed to create raw socket (need root/CAP_NET_RAW)").Base(err)
 	}
 	if err := syscall.SetsockoptInt(rawFd, syscall.IPPROTO_IP, syscall.IP_HDRINCL, 1); err != nil {
 		syscall.Close(rawFd)
-		recvConn.Close()
 		return nil, errors.New("failed to set IP_HDRINCL").Base(err)
 	}
 
@@ -90,16 +76,13 @@ func NewConnServer(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 		recvDomains = append(recvDomains, labels)
 	}
 
-	clientIDLen := 0
-	if c.Mode == "n-1" || c.Mode == "" {
-		clientIDLen = clientIDWidth
-	}
+	clientIDLen := clientIDWidth
 
 	initIPID, _ := rand.Int(rand.Reader, big.NewInt(65536))
 
 	server := &qstunnelConnServer{
 		conn:        raw,
-		recvSock:    recvConn,
+		recvSock:    raw, // reuse KCP's bound socket for DNS queries
 		rawSockFd:   rawFd,
 		ipID:        uint16(initIPID.Int64()),
 		recvDomains: recvDomains,
@@ -149,7 +132,7 @@ func (s *qstunnelConnServer) recvLoop() {
 			break
 		}
 
-		n, addr, err := s.recvSock.ReadFromUDP(buf)
+		n, addr, err := s.recvSock.ReadFrom(buf)
 		if err != nil {
 			if s.closed {
 				break
@@ -185,7 +168,7 @@ func (s *qstunnelConnServer) recvLoop() {
 
 		// Send DNS response regardless
 		response := createNoerrorEmptyResponse(parsed.QID, parsed.QFlags, rawData[12:parsed.NextQuestion])
-		s.recvSock.WriteToUDP(response, addr)
+		s.recvSock.WriteTo(response, addr)
 
 		// Join data labels (exclude domain suffix)
 		dataLabels := parsed.Labels[:len(parsed.Labels)-matchedDomainLabels]
