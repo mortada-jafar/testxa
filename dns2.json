@@ -1,0 +1,134 @@
+{
+  "dns": {
+    "tag": "dns_out",
+    "servers": [
+  
+      "8.8.8.8"
+ 
+    ],
+    "queryStrategy": "UseIPv4"
+  },
+  "stats": {},
+  "routing": {
+    "rules": [
+      {
+        "port": 53,
+        "type": "field",
+        "outboundTag": "proxy"
+      },
+      {
+        "type": "field",
+        "domain": [
+          "regexp:\\.ir$"
+        ],
+        "outboundTag": "direct"
+      },
+      {
+        "ip": [
+          "geoip:ir",
+          "geoip:private"
+        ],
+        "type": "field",
+        "outboundTag": "direct"
+      }
+    ],
+    "domainStrategy": "IPIfNonMatch"
+  },
+  "inbounds": [
+    {
+      "tag": "socks",
+      "port": 10808,
+      "protocol": "socks",
+      "settings": {
+        "udp": true,
+        "auth": "noauth",
+        "userLevel": 8
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    },
+    {
+      "tag": "http",
+      "port": 10809,
+      "protocol": "http",
+      "settings": {
+        "userLevel": 8
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": [
+          "http",
+          "tls"
+        ]
+      }
+    }
+  ],
+  "outbounds": [
+    {
+        "tag": "proxy",
+        "protocol": "vless",
+        "settings": {
+            "vnext": [
+                {
+                    "address": "2.144.7.39",
+                    "port": 5353,
+                    "users": [
+                        {
+                            "id": "5b05ff1d-24e7-49a9-ac70-fd5dae188722",
+                            "encryption": "none"
+                        }
+                    ]
+                }
+            ]
+        },
+        "streamSettings": {
+            "network": "kcp",
+            "security": "none",
+            "kcpSettings": {
+                "mtu": 131,
+                "tti": 300,
+                "uplinkCapacity":0,
+                "downlinkCapacity": 0,
+                "congestion": true,
+                "readBufferSize": 0,
+                "writeBufferSize": 0
+            },
+            "finalmask": {
+                "udp": [
+                    {
+                        "type": "xdns",
+                        "settings": {
+                            "domain": "t3.j76.ir",
+                            "maxQnameLen": 253,
+                            "pollIntervalMs": 12,
+                            "pollConcurrency": 12
+                        }
+                    }
+                ]
+            }
+        }
+    },
+ {
+      "tag": "dns_out",
+      "protocol": "dns"
+    }, 
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "UseIPv4"
+      }
+    },
+    {
+      "tag": "block",
+      "protocol": "blackhole"
+    }
+   
+  ],
+  "remarks": "\uD83C\uDDE9\uD83C\uDDEA frg22--testak (64.81 GB)-∞ Days"
+}

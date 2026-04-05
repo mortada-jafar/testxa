@@ -1,0 +1,50 @@
+{
+    "log": {
+        "loglevel": "debug"
+    },
+    "inbounds": [
+        {
+            "listen": "0.0.0.0",
+            "port": 443,
+            "protocol": "vless",
+            "settings": {
+                "clients": [
+                    {
+                        "id": "18947b04-60a2-4a39-b880-5fbab17b84b2",
+                        "encryption": "none"
+                    }
+                ],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "kcp",
+                "kcpSettings": {
+                    "mtu": 35,
+                    "tti": 200,
+                    "uplinkCapacity": 10,
+                    "downlinkCapacity": 50,
+                    "readBufferSize": 10,
+                    "writeBufferSize": 10
+                },
+                "finalmask": {
+                    "udp": [
+                        {
+                            "type": "qstunnel",
+                            "settings": {
+                                "mode": "n-1",
+                                "receivePort": 5353,
+                                "recvDomains": ["t.local.test"]
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "protocol": "freedom",
+            "settings": {}
+        }
+    ]
+}
