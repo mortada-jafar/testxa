@@ -9,16 +9,13 @@ option java_multiple_files = true;
 message Config {
   // Client-side fields
   string domain = 2;                  // DNS domain suffix for queries
-  repeated string dns_ips = 3;        // DNS server IPs to send queries to
-  string fake_send_ip = 4;            // Spoofed source IP server uses for responses
+  string fake_send_ip = 4;            // Spoofed source IP for responses
   uint32 fake_send_port = 5;          // Spoofed source port (default 443)
   uint32 max_domain_len = 6;          // Max encoded domain length (default 99)
   uint32 max_sub_len = 7;             // Max DNS label length (default 63)
   uint32 retries = 8;                 // Retry count per query
-  uint32 send_sock_count = 9;         // Number of UDP send sockets (default 64)
-  string my_public_ip = 10;           // Client's public IP or "auto" for auto-detect
+  string my_public_ip = 10;           // Client's public IP
 
   // Server-side fields
-  uint32 receive_port = 11;           // DNS listen port (default 53)
   repeated string recv_domains = 12;  // Accepted domain suffixes
 }

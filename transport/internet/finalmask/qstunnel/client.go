@@ -20,8 +20,7 @@ const (
 	clientIDWidth    = 7
 	dataOffsetWidth  = 3
 	totalDataOffsets = 1 << (5 * dataOffsetWidth) // 32768
-	sendQueueSize    = 1024
-	sendQueryType    = 1 // A record
+	sendQueryType    = 1                          // A record
 
 	natKeepaliveInterval = 2 * time.Second
 	infoSendThreshold    = 25 * time.Second
@@ -33,44 +32,32 @@ type packet struct {
 }
 
 type qstunnelConnClient struct {
-	conn net.PacketConn // original raw conn, kept for lifecycle
+	conn net.PacketConn // KCP's raw socket - used for sending DNS queries
 
-	// Send infrastructure
-	sendSocks []*net.UDPConn
-	sendQueue chan *sendItem
-
-	// Receive infrastructure
+	// Receive infrastructure (separate socket for IP-spoofed responses)
 	recvSock *net.UDPConn
 
 	// Config
-	dnsIPs           []string
-	domain           []byte
-	qnameEncoded     []byte
-	fakeSendIP       string
-	fakeSendPort     int
-	maxDomainLen     int
-	maxSubLen        int
-	retries          int
-	chunkLen         int
-	clientIDBytes    []byte
-	myPublicIP       string
+	domain        []byte
+	qnameEncoded  []byte
+	fakeSendIP    string
+	fakeSendPort  int
+	maxDomainLen  int
+	maxSubLen     int
+	retries       int
+	chunkLen      int
+	clientIDBytes []byte
+	myPublicIP    string
 
 	// State
-	dataOffset     int
-	queryID        uint16
-	sendSockIndex  int
-	dnsIPIndex     int
+	dataOffset      int
+	queryID         uint16
 	lastWanRecvTime atomic.Int64
+	dnsAddr         atomic.Pointer[net.Addr] // captured from first WriteTo
 
-	readQueue  chan *packet
-	closed     bool
-	mu         sync.Mutex
-}
-
-type sendItem struct {
-	packets   [][]byte // DNS query packets
-	dnsIP     string
-	entryTime time.Time
+	readQueue chan *packet
+	closed    bool
+	mu        sync.Mutex
 }
 
 func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, error) {
@@ -94,11 +81,6 @@ func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 	if fakeSendPort == 0 {
 		fakeSendPort = 443
 	}
-	retries := int(c.Retries)
-	sendSockCount := int(c.SendSockCount)
-	if sendSockCount == 0 {
-		sendSockCount = 64
-	}
 
 	// Generate random client ID to distinguish clients on the server
 	n, _ := rand.Int(rand.Reader, big.NewInt(1<<(5*clientIDWidth)))
@@ -116,26 +98,9 @@ func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 		return nil, errors.New("maxDomainLen too small to fit any data")
 	}
 
-	// Create send sockets
-	sendSocks := make([]*net.UDPConn, sendSockCount)
-	for i := range sendSocks {
-		conn, err := net.ListenPacket("udp4", "0.0.0.0:0")
-		if err != nil {
-			// Clean up already created sockets
-			for j := 0; j < i; j++ {
-				sendSocks[j].Close()
-			}
-			return nil, errors.New("failed to create send socket").Base(err)
-		}
-		sendSocks[i] = conn.(*net.UDPConn)
-	}
-
-	// Create receive socket
+	// Create receive socket for IP-spoofed responses
 	recvConn, err := net.ListenPacket("udp4", "0.0.0.0:0")
 	if err != nil {
-		for _, s := range sendSocks {
-			s.Close()
-		}
 		return nil, errors.New("failed to create receive socket").Base(err)
 	}
 	recvSock := recvConn.(*net.UDPConn)
@@ -143,7 +108,7 @@ func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 	// Resolve public IP if needed
 	myPublicIP := c.MyPublicIp
 	if myPublicIP == "" || myPublicIP == "auto" {
-		myPublicIP = "0.0.0.0" // will be set later or discovered
+		myPublicIP = "0.0.0.0"
 	}
 
 	// Random initial state
@@ -152,17 +117,14 @@ func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 
 	client := &qstunnelConnClient{
 		conn:          raw,
-		sendSocks:     sendSocks,
-		sendQueue:     make(chan *sendItem, sendQueueSize),
 		recvSock:      recvSock,
-		dnsIPs:        c.DnsIps,
 		domain:        []byte(c.Domain),
 		qnameEncoded:  qnameEncoded,
 		fakeSendIP:    c.FakeSendIp,
 		fakeSendPort:  fakeSendPort,
 		maxDomainLen:  maxDomainLen,
 		maxSubLen:     maxSubLen,
-		retries:       retries,
+		retries:       int(c.Retries),
 		chunkLen:      chunkLen,
 		clientIDBytes: clientIDBytes,
 		myPublicIP:    myPublicIP,
@@ -182,7 +144,6 @@ func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 	}
 
 	go client.recvLoop()
-	go client.sendLoop()
 	go client.natKeepalive()
 
 	return client, nil
@@ -222,34 +183,7 @@ func (c *qstunnelConnClient) recvLoop() {
 	close(c.readQueue)
 }
 
-// sendLoop processes the send queue - sends DNS queries to DNS servers.
-func (c *qstunnelConnClient) sendLoop() {
-	sockIdx := 0
-	for item := range c.sendQueue {
-		if c.closed {
-			return
-		}
-		if time.Since(item.entryTime) > time.Second {
-			continue // drop stale
-		}
-
-		dstAddr, err := net.ResolveUDPAddr("udp4", item.dnsIP+":53")
-		if err != nil {
-			continue
-		}
-
-		for _, pkt := range item.packets {
-			sock := c.sendSocks[sockIdx%len(c.sendSocks)]
-			sockIdx++
-			_, err := sock.WriteTo(pkt, dstAddr)
-			if err != nil {
-				errors.LogDebug(context.Background(), "qstunnel send error: ", err)
-			}
-		}
-	}
-}
-
-// natKeepalive sends periodic packets to maintain NAT binding.
+// natKeepalive sends periodic packets to maintain NAT binding on recvSock.
 func (c *qstunnelConnClient) natKeepalive() {
 	fakeAddr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", c.fakeSendIP, c.fakeSendPort))
 	if err != nil {
@@ -287,8 +221,7 @@ func (c *qstunnelConnClient) buildInfoPacket() []byte {
 	binary.BigEndian.PutUint16(info[10:12], uint16(c.fakeSendPort))
 
 	infoEncoded := base32EncodeLower(info)
-	// "78" prefix marks this as info packet (fragment_part=63 + magic='8' = not last, high bit)
-	// Using offset counter for info separately
+
 	c.mu.Lock()
 	infoOffset := c.dataOffset
 	c.dataOffset = (c.dataOffset + 1) % totalDataOffsets
@@ -368,21 +301,13 @@ func (c *qstunnelConnClient) WriteTo(p []byte, addr net.Addr) (n int, err error)
 	c.queryID = qid
 	c.mu.Unlock()
 
-	// Send to each DNS IP with retries
+	// Send DNS queries via KCP's raw socket to the DNS server (addr = 1.1.1.1:53 from KCP dial)
 	for try := 0; try <= c.retries; try++ {
-		c.mu.Lock()
-		dnsIP := c.dnsIPs[c.dnsIPIndex%len(c.dnsIPs)]
-		c.dnsIPIndex++
-		c.mu.Unlock()
-
-		select {
-		case c.sendQueue <- &sendItem{
-			packets:   packets,
-			dnsIP:     dnsIP,
-			entryTime: time.Now(),
-		}:
-		default:
-			// queue full, drop
+		for _, pkt := range packets {
+			_, err := c.conn.WriteTo(pkt, addr)
+			if err != nil {
+				errors.LogDebug(context.Background(), "qstunnel send error: ", err)
+			}
 		}
 	}
 
@@ -395,10 +320,6 @@ func (c *qstunnelConnClient) Close() error {
 	c.mu.Unlock()
 
 	c.recvSock.Close()
-	for _, s := range c.sendSocks {
-		s.Close()
-	}
-	close(c.sendQueue)
 	return c.conn.Close()
 }
 
@@ -417,4 +338,3 @@ func (c *qstunnelConnClient) SetReadDeadline(t time.Time) error {
 func (c *qstunnelConnClient) SetWriteDeadline(t time.Time) error {
 	return c.recvSock.SetWriteDeadline(t)
 }
-

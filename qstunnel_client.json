@@ -13,7 +13,10 @@
             },
             "sniffing": {
                 "enabled": true,
-                "destOverride": ["http", "tls"]
+                "destOverride": [
+                    "http",
+                    "tls"
+                ]
             },
             "tag": "socks"
         }
@@ -25,7 +28,7 @@
             "settings": {
                 "vnext": [
                     {
-                        "address": "1.1.1.1",
+                        "address": "10.185.68.113",
                         "port": 53,
                         "users": [
                             {
@@ -52,14 +55,9 @@
                             "type": "qstunnel",
                             "settings": {
                                 "domain": "t.psss.ir",
-                                "dnsIps": ["1.1.1.1"],
-                                "fakeSendIp": "4.2.2.4",
+                                "fakeSendIp": "213.176.6.219",
                                 "fakeSendPort": 443,
-                                "maxDomainLen": 99,
-                                "maxSubLen": 63,
-                                "retries": 1,
-                                "sendSockCount": 64,
-                                "myPublicIp": "auto"
+                                "myPublicIp": "83.123.100.30"
                             }
                         }
                     ]
@@ -80,7 +78,9 @@
         "rules": [
             {
                 "type": "field",
-                "ip": ["geoip:private"],
+                "ip": [
+                    "geoip:private"
+                ],
                 "outboundTag": "direct"
             }
         ]

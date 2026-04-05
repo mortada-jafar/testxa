@@ -140,14 +140,17 @@ func (s *qstunnelConnServer) recvLoop() {
 			continue
 		}
 
-		rawData := buf[:n]
+		rawData := make([]byte, n)
+		copy(rawData, buf[:n])
 
 		// Parse DNS query
 		parsed, err := handleDNSRequest(rawData)
 		if err != nil {
+			errors.LogDebug(context.Background(), "qstunnel: not a DNS query, len=", n, " from ", addr)
 			continue
 		}
 		if parsed.QType != recvQueryType {
+			errors.LogDebug(context.Background(), "qstunnel: wrong qtype=", parsed.QType, " from ", addr)
 			continue
 		}
 
@@ -163,8 +166,10 @@ func (s *qstunnelConnServer) recvLoop() {
 			}
 		}
 		if matchedDomainLabels == 0 {
+			errors.LogDebug(context.Background(), "qstunnel: no matching domain, labels=", parsed.Labels, " from ", addr)
 			continue
 		}
+		errors.LogInfo(context.Background(), "qstunnel: received DNS query with ", len(parsed.Labels), " labels from ", addr)
 
 		// Send DNS response regardless
 		response := createNoerrorEmptyResponse(parsed.QID, parsed.QFlags, rawData[12:parsed.NextQuestion])
@@ -196,6 +201,7 @@ func (s *qstunnelConnServer) recvLoop() {
 		if fragmentPart == 63 && !lastFragment {
 			infoData, err := base32DecodeNoPad(chunkData)
 			if err != nil || len(infoData) != 12 {
+				errors.LogDebug(context.Background(), "qstunnel: invalid info packet, chunkLen=", len(chunkData), " decodedLen=", len(infoData))
 				continue
 			}
 
@@ -205,6 +211,9 @@ func (s *qstunnelConnServer) recvLoop() {
 			copy(si.spoofSrcIP[:], infoData[6:10])
 			si.spoofSrcPort = binary.BigEndian.Uint16(infoData[10:12])
 			si.clientIPStr = net.IP(si.clientIP[:]).String()
+
+			errors.LogInfo(context.Background(), "qstunnel: INFO from client=", si.clientIPStr, ":", si.clientPort,
+				" spoofSrc=", net.IP(si.spoofSrcIP[:]).String(), ":", si.spoofSrcPort)
 
 			s.mu.Lock()
 			cs, exists := s.clients[clientKey]
@@ -313,7 +322,9 @@ func (s *qstunnelConnServer) clientSendLoop(clientKey string, cs *clientState) {
 		sa.Port = int(si.clientPort)
 
 		if err := syscall.Sendto(s.rawSockFd, pkt, 0, &sa); err != nil {
-			errors.LogDebug(context.Background(), "qstunnel raw send error: ", err)
+			errors.LogWarning(context.Background(), "qstunnel raw send error: ", err, " to ", si.clientIPStr, ":", si.clientPort)
+		} else {
+			errors.LogDebug(context.Background(), "qstunnel: spoofed pkt sent to ", si.clientIPStr, ":", si.clientPort, " from ", net.IP(si.spoofSrcIP[:]).String(), ":", si.spoofSrcPort, " len=", len(data))
 		}
 	}
 }
@@ -370,6 +381,7 @@ func (s *qstunnelConnServer) WriteTo(p []byte, addr net.Addr) (n int, err error)
 	}
 
 	// Find the client by address
+	errors.LogDebug(context.Background(), "qstunnel: WriteTo len=", len(p), " addr=", addr, " clients=", len(s.clients))
 	for _, cs := range s.clients {
 		cs.mu.Lock()
 		si := cs.sendInfo

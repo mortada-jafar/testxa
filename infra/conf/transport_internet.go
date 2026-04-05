@@ -1641,32 +1641,26 @@ func (c *Xicmp) Build() (proto.Message, error) {
 }
 
 type QSTunnel struct {
-	Domain        string   `json:"domain"`
-	DnsIps        []string `json:"dnsIps"`
-	FakeSendIp    string   `json:"fakeSendIp"`
-	FakeSendPort  uint32   `json:"fakeSendPort"`
-	MaxDomainLen  uint32   `json:"maxDomainLen"`
-	MaxSubLen     uint32   `json:"maxSubLen"`
-	Retries       uint32   `json:"retries"`
-	SendSockCount uint32   `json:"sendSockCount"`
-	MyPublicIp    string   `json:"myPublicIp"`
-	ReceivePort   uint32   `json:"receivePort"`
-	RecvDomains   []string `json:"recvDomains"`
+	Domain       string   `json:"domain"`
+	FakeSendIp   string   `json:"fakeSendIp"`
+	FakeSendPort uint32   `json:"fakeSendPort"`
+	MaxDomainLen uint32   `json:"maxDomainLen"`
+	MaxSubLen    uint32   `json:"maxSubLen"`
+	Retries      uint32   `json:"retries"`
+	MyPublicIp   string   `json:"myPublicIp"`
+	RecvDomains  []string `json:"recvDomains"`
 }
 
 func (c *QSTunnel) Build() (proto.Message, error) {
 	return &qstunnel.Config{
-		Domain:        c.Domain,
-		DnsIps:        c.DnsIps,
-		FakeSendIp:    c.FakeSendIp,
-		FakeSendPort:  c.FakeSendPort,
-		MaxDomainLen:  c.MaxDomainLen,
-		MaxSubLen:     c.MaxSubLen,
-		Retries:       c.Retries,
-		SendSockCount: c.SendSockCount,
-		MyPublicIp:    c.MyPublicIp,
-		ReceivePort:   c.ReceivePort,
-		RecvDomains:   c.RecvDomains,
+		Domain:       c.Domain,
+		FakeSendIp:   c.FakeSendIp,
+		FakeSendPort: c.FakeSendPort,
+		MaxDomainLen: c.MaxDomainLen,
+		MaxSubLen:    c.MaxSubLen,
+		Retries:      c.Retries,
+		MyPublicIp:   c.MyPublicIp,
+		RecvDomains:  c.RecvDomains,
 	}, nil
 }
 
