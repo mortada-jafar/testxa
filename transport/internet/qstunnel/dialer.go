@@ -296,46 +296,32 @@ func (h *clientHub) sendData(data []byte, dest gonet.Addr) {
 
 // qsConn is a net.Conn that sends via DNS queries and reads from the shared hub.
 type qsConn struct {
-	hub    *clientHub
-	dest   *gonet.UDPAddr // DNS resolver address
-	closed int32
-
-	// Read reassembly buffer
-	readBuf []byte // accumulated raw data from spoofed packets
-	pending []byte // current message being read (after length prefix parsed)
+	hub     *clientHub
+	dest    *gonet.UDPAddr // DNS resolver address
+	closed  int32
+	pending []byte // leftover data from previous Read
 }
 
 func (c *qsConn) Read(b []byte) (int, error) {
-	for {
-		// If we have pending data from a previous message, return it
-		if len(c.pending) > 0 {
-			n := copy(b, c.pending)
-			c.pending = c.pending[n:]
-			return n, nil
-		}
-
-		// Try to parse a complete framed message from readBuf
-		if len(c.readBuf) >= 4 {
-			msgLen := int(binary.BigEndian.Uint32(c.readBuf[0:4]))
-			if len(c.readBuf) >= 4+msgLen {
-				c.pending = c.readBuf[4 : 4+msgLen]
-				c.readBuf = c.readBuf[4+msgLen:]
-				n := copy(b, c.pending)
-				c.pending = c.pending[n:]
-				return n, nil
-			}
-		}
-
-		// Need more data -- read from hub
-		if atomic.LoadInt32(&c.closed) != 0 {
-			return 0, io.EOF
-		}
-		data, ok := <-c.hub.readCh
-		if !ok {
-			return 0, io.EOF
-		}
-		c.readBuf = append(c.readBuf, data...)
+	// Return leftover data first
+	if len(c.pending) > 0 {
+		n := copy(b, c.pending)
+		c.pending = c.pending[n:]
+		return n, nil
 	}
+
+	if atomic.LoadInt32(&c.closed) != 0 {
+		return 0, io.EOF
+	}
+	data, ok := <-c.hub.readCh
+	if !ok {
+		return 0, io.EOF
+	}
+	n := copy(b, data)
+	if n < len(data) {
+		c.pending = data[n:]
+	}
+	return n, nil
 }
 
 func (c *qsConn) Write(b []byte) (int, error) {

@@ -89,13 +89,10 @@ func (c *serverVConn) Write(b []byte) (int, error) {
 		return 0, nil
 	}
 
-	// Add 4-byte length prefix so client can reassemble chunks
-	framed := make([]byte, 4+len(b))
-	binary.BigEndian.PutUint32(framed[0:4], uint32(len(b)))
-	copy(framed[4:], b)
-
+	buf := make([]byte, len(b))
+	copy(buf, b)
 	select {
-	case sc.writeQueue <- framed:
+	case sc.writeQueue <- buf:
 		return len(b), nil
 	default:
 		return 0, nil
@@ -375,9 +372,6 @@ func labelsEqual(a [][]byte, b []string) bool {
 	return true
 }
 
-// maxUDPPayload is the max data per spoofed UDP packet (MTU 1500 - IP header 20 - UDP header 8)
-const maxUDPPayload = 1400
-
 // clientSendLoop sends data back to a client via IP-spoofed UDP.
 func (l *Listener) clientSendLoop(clientKey string, sc *serverClient) {
 	for data := range sc.writeQueue {
@@ -393,34 +387,26 @@ func (l *Listener) clientSendLoop(clientKey string, sc *serverClient) {
 			continue
 		}
 
-		// Split large data into chunks that fit in a single UDP packet
-		for offset := 0; offset < len(data); offset += maxUDPPayload {
-			end := offset + maxUDPPayload
-			if end > len(data) {
-				end = len(data)
-			}
-			chunk := data[offset:end]
+		udpPayload := buildUDPPayloadV4(data, si.spoofSrcPort, si.clientPort, si.spoofSrcIP, si.clientIP)
 
-			udpPayload := buildUDPPayloadV4(chunk, si.spoofSrcPort, si.clientPort, si.spoofSrcIP, si.clientIP)
+		l.mu.Lock()
+		ipID := l.ipID
+		l.ipID++
+		l.mu.Unlock()
 
-			l.mu.Lock()
-			ipID := l.ipID
-			l.ipID++
-			l.mu.Unlock()
+		// dontFragment=false -- let the kernel handle IP fragmentation for large packets
+		ipHeader := buildIPv4Header(len(udpPayload), si.spoofSrcIP, si.clientIP, udpProto, 128, ipID, false)
 
-			ipHeader := buildIPv4Header(len(udpPayload), si.spoofSrcIP, si.clientIP, udpProto, 128, ipID, true)
+		pkt := make([]byte, len(ipHeader)+len(udpPayload))
+		copy(pkt, ipHeader)
+		copy(pkt[len(ipHeader):], udpPayload)
 
-			pkt := make([]byte, len(ipHeader)+len(udpPayload))
-			copy(pkt, ipHeader)
-			copy(pkt[len(ipHeader):], udpPayload)
+		var sa syscall.SockaddrInet4
+		copy(sa.Addr[:], si.clientIP[:])
+		sa.Port = int(si.clientPort)
 
-			var sa syscall.SockaddrInet4
-			copy(sa.Addr[:], si.clientIP[:])
-			sa.Port = int(si.clientPort)
-
-			if err := syscall.Sendto(l.rawSockFd, pkt, 0, &sa); err != nil {
-				errors.LogDebug(context.Background(), "qstunnel: raw send error: ", err)
-			}
+		if err := syscall.Sendto(l.rawSockFd, pkt, 0, &sa); err != nil {
+			errors.LogDebug(context.Background(), "qstunnel: raw send error: ", err)
 		}
 	}
 }
