@@ -136,7 +136,7 @@ func newClientHub(c *Config) (*clientHub, error) {
 		maxSubLen:     maxSubLen,
 		dataOffset:    int(initOffset.Int64()),
 		queryID:       uint16(initQID.Int64()),
-		readCh:        make(chan []byte, 1024),
+		readCh:        make(chan []byte, 65536),
 	}
 
 	// Send initial NAT punch (same as Python: 3 packets with random size 257-499)
@@ -182,16 +182,10 @@ func (h *clientHub) recvLoop() {
 
 		h.lastWanRecvTime.Store(time.Now().UnixMilli())
 
-		errors.LogInfo(context.Background(), "qstunnel client: RECEIVED spoofed pkt len=", n)
-
 		data := make([]byte, n)
 		copy(data, buf[:n])
 
-		select {
-		case h.readCh <- data:
-		default:
-			errors.LogDebug(context.Background(), "qstunnel client: readCh full, dropped")
-		}
+		h.readCh <- data
 	}
 }
 
