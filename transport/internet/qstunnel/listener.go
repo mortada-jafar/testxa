@@ -9,6 +9,7 @@ import (
 	"math/big"
 	gonet "net"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -65,8 +66,7 @@ type serverVConn struct {
 	listener *Listener
 	clientID string
 	readCh   chan []byte
-	closed   int32
-	mu       sync.Mutex
+	closed   atomic.Int32
 }
 
 func (c *serverVConn) Read(b []byte) (int, error) {
@@ -97,10 +97,14 @@ func (c *serverVConn) Write(b []byte) (int, error) {
 }
 
 func (c *serverVConn) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	close(c.readCh)
+	if c.closed.CompareAndSwap(0, 1) {
+		close(c.readCh)
+	}
 	return nil
+}
+
+func (c *serverVConn) isClosed() bool {
+	return c.closed.Load() != 0
 }
 
 func (c *serverVConn) LocalAddr() gonet.Addr {
@@ -344,10 +348,11 @@ func (l *Listener) recvLoop() {
 			continue
 		}
 
-		select {
-		case vc.readCh <- decoded:
-		default:
-			errors.LogDebug(context.Background(), "qstunnel: server readCh full for client ", clientKey)
+		if !vc.isClosed() {
+			select {
+			case vc.readCh <- decoded:
+			default:
+			}
 		}
 	}
 }
