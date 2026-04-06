@@ -63,11 +63,11 @@
                 "network": "qstunnel",
                 "qstunnelSettings": {
                     "domain": "t.psss.ir",
-                    "fakeSendIp": "146.70.104.252",
-                    "fakeSendPort": 443,
+                    "fakeSendIp": "22.22.22.22",
+                    "fakeSendPort": 80,
                     "myPublicIp": "178.131.186.36",
-                    "maxDomainLen": 60,
-                    "maxSubLen": 50,
+                    "maxDomainLen": 99,
+                    "maxSubLen": 63,
                     "retries": 1
                 }
             }

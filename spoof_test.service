@@ -1,0 +1,13 @@
+[Unit]
+Description=Spoof Test - sends spoofed UDP every 6 seconds
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /root/spoof_test.py 146.70.104.252 46.62.149.37 54569
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
