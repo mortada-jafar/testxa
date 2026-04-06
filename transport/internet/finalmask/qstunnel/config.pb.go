@@ -24,13 +24,14 @@ const (
 type Config struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Client-side fields
-	Domain       string `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"`                                    // DNS domain suffix for queries
-	FakeSendIp   string `protobuf:"bytes,4,opt,name=fake_send_ip,json=fakeSendIp,proto3" json:"fake_send_ip,omitempty"`        // Spoofed source IP for responses
-	FakeSendPort uint32 `protobuf:"varint,5,opt,name=fake_send_port,json=fakeSendPort,proto3" json:"fake_send_port,omitempty"` // Spoofed source port (default 443)
-	MaxDomainLen uint32 `protobuf:"varint,6,opt,name=max_domain_len,json=maxDomainLen,proto3" json:"max_domain_len,omitempty"` // Max encoded domain length (default 99)
-	MaxSubLen    uint32 `protobuf:"varint,7,opt,name=max_sub_len,json=maxSubLen,proto3" json:"max_sub_len,omitempty"`          // Max DNS label length (default 63)
-	Retries      uint32 `protobuf:"varint,8,opt,name=retries,proto3" json:"retries,omitempty"`                                 // Retry count per query
-	MyPublicIp   string `protobuf:"bytes,10,opt,name=my_public_ip,json=myPublicIp,proto3" json:"my_public_ip,omitempty"`       // Client's public IP
+	Domain        string `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"`                                       // DNS domain suffix for queries
+	FakeSendIp    string `protobuf:"bytes,4,opt,name=fake_send_ip,json=fakeSendIp,proto3" json:"fake_send_ip,omitempty"`           // Spoofed source IP for responses
+	FakeSendPort  uint32 `protobuf:"varint,5,opt,name=fake_send_port,json=fakeSendPort,proto3" json:"fake_send_port,omitempty"`    // Spoofed source port (default 443)
+	MaxDomainLen  uint32 `protobuf:"varint,6,opt,name=max_domain_len,json=maxDomainLen,proto3" json:"max_domain_len,omitempty"`    // Max encoded domain length (default 99)
+	MaxSubLen     uint32 `protobuf:"varint,7,opt,name=max_sub_len,json=maxSubLen,proto3" json:"max_sub_len,omitempty"`             // Max DNS label length (default 63)
+	Retries       uint32 `protobuf:"varint,8,opt,name=retries,proto3" json:"retries,omitempty"`                                    // Retry count per query
+	SendSockCount uint32 `protobuf:"varint,9,opt,name=send_sock_count,json=sendSockCount,proto3" json:"send_sock_count,omitempty"` // Number of UDP send sockets (default 512)
+	MyPublicIp    string `protobuf:"bytes,10,opt,name=my_public_ip,json=myPublicIp,proto3" json:"my_public_ip,omitempty"`          // Client's public IP
 	// Server-side fields
 	RecvDomains   []string `protobuf:"bytes,12,rep,name=recv_domains,json=recvDomains,proto3" json:"recv_domains,omitempty"` // Accepted domain suffixes
 	unknownFields protoimpl.UnknownFields
@@ -109,6 +110,13 @@ func (x *Config) GetRetries() uint32 {
 	return 0
 }
 
+func (x *Config) GetSendSockCount() uint32 {
+	if x != nil {
+		return x.SendSockCount
+	}
+	return 0
+}
+
 func (x *Config) GetMyPublicIp() string {
 	if x != nil {
 		return x.MyPublicIp
@@ -127,7 +135,7 @@ var File_transport_internet_finalmask_qstunnel_config_proto protoreflect.FileDes
 
 const file_transport_internet_finalmask_qstunnel_config_proto_rawDesc = "" +
 	"\n" +
-	"2transport/internet/finalmask/qstunnel/config.proto\x12*xray.transport.internet.finalmask.qstunnel\"\x8d\x02\n" +
+	"2transport/internet/finalmask/qstunnel/config.proto\x12*xray.transport.internet.finalmask.qstunnel\"\xb5\x02\n" +
 	"\x06Config\x12\x16\n" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\x12 \n" +
 	"\ffake_send_ip\x18\x04 \x01(\tR\n" +
@@ -135,7 +143,8 @@ const file_transport_internet_finalmask_qstunnel_config_proto_rawDesc = "" +
 	"\x0efake_send_port\x18\x05 \x01(\rR\ffakeSendPort\x12$\n" +
 	"\x0emax_domain_len\x18\x06 \x01(\rR\fmaxDomainLen\x12\x1e\n" +
 	"\vmax_sub_len\x18\a \x01(\rR\tmaxSubLen\x12\x18\n" +
-	"\aretries\x18\b \x01(\rR\aretries\x12 \n" +
+	"\aretries\x18\b \x01(\rR\aretries\x12&\n" +
+	"\x0fsend_sock_count\x18\t \x01(\rR\rsendSockCount\x12 \n" +
 	"\fmy_public_ip\x18\n" +
 	" \x01(\tR\n" +
 	"myPublicIp\x12!\n" +

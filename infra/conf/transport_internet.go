@@ -32,6 +32,7 @@ import (
 	"github.com/xtls/xray-core/transport/internet/finalmask/noise"
 	"github.com/xtls/xray-core/transport/internet/finalmask/salamander"
 	finalsudoku "github.com/xtls/xray-core/transport/internet/finalmask/sudoku"
+	finalmaskqstunnel "github.com/xtls/xray-core/transport/internet/finalmask/qstunnel"
 	"github.com/xtls/xray-core/transport/internet/qstunnel"
 	"github.com/xtls/xray-core/transport/internet/finalmask/xdns"
 	"github.com/xtls/xray-core/transport/internet/finalmask/xicmp"
@@ -1253,6 +1254,7 @@ var (
 		"sudoku":           func() interface{} { return new(Sudoku) },
 		"xdns":             func() interface{} { return new(Xdns) },
 		"xicmp":            func() interface{} { return new(Xicmp) },
+		"qstunnel":         func() interface{} { return new(QSTunnelMask) },
 	}, "type", "settings")
 )
 
@@ -1655,6 +1657,32 @@ type QSTunnelConfig struct {
 
 func (c *QSTunnelConfig) Build() (proto.Message, error) {
 	return &qstunnel.Config{
+		Domain:        c.Domain,
+		FakeSendIp:    c.FakeSendIp,
+		FakeSendPort:  c.FakeSendPort,
+		MaxDomainLen:  c.MaxDomainLen,
+		MaxSubLen:     c.MaxSubLen,
+		Retries:       c.Retries,
+		SendSockCount: c.SendSockCount,
+		MyPublicIp:    c.MyPublicIp,
+		RecvDomains:   c.RecvDomains,
+	}, nil
+}
+
+type QSTunnelMask struct {
+	Domain        string   `json:"domain"`
+	FakeSendIp    string   `json:"fakeSendIp"`
+	FakeSendPort  uint32   `json:"fakeSendPort"`
+	MaxDomainLen  uint32   `json:"maxDomainLen"`
+	MaxSubLen     uint32   `json:"maxSubLen"`
+	Retries       uint32   `json:"retries"`
+	SendSockCount uint32   `json:"sendSockCount"`
+	MyPublicIp    string   `json:"myPublicIp"`
+	RecvDomains   []string `json:"recvDomains"`
+}
+
+func (c *QSTunnelMask) Build() (proto.Message, error) {
+	return &finalmaskqstunnel.Config{
 		Domain:        c.Domain,
 		FakeSendIp:    c.FakeSendIp,
 		FakeSendPort:  c.FakeSendPort,

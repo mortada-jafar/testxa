@@ -1,44 +1,21 @@
 {
     "log": {
-        "loglevel": "debug",
-        "access": "none"
-    },
-    "policy": {
-        "levels": {
-            "0": {
-                "uplinkOnly": 0,
-                "downlinkOnly": 0
-            }
-        }
-    },
-    "dns": {
-        "servers": [
-            "fakedns"
-        ]
+        "loglevel": "debug"
     },
     "inbounds": [
         {
-            "tag": "mixed-in",
             "listen": "127.0.0.1",
             "port": 10808,
-            "protocol": "mixed",
+            "protocol": "socks",
+            "settings": {
+                "auth": "noauth",
+                "udp": true
+            },
             "sniffing": {
                 "enabled": true,
-                "destOverride": [
-                    "fakedns"
-                ],
-                "routeOnly": false
+                "destOverride": ["http", "tls"]
             },
-            "settings": {
-                "udp": true,
-                "ip": "127.0.0.1"
-            },
-            "streamSettings": {
-                "sockopt": {
-                    "tcpKeepAliveInterval": 1,
-                    "tcpKeepAliveIdle": 11
-                }
-            }
+            "tag": "socks"
         }
     ],
     "outbounds": [
@@ -48,8 +25,8 @@
             "settings": {
                 "vnext": [
                     {
-                        "address": "2.144.7.39",
-                        "port": 2086,
+                        "address": "8.8.8.8",
+                        "port": 53,
                         "users": [
                             {
                                 "id": "18947b04-60a2-4a39-b880-5fbab17b84b2",
@@ -60,15 +37,30 @@
                 ]
             },
             "streamSettings": {
-                "network": "qstunnel",
-                "qstunnelSettings": {
-                    "domain": "t.psss.ir",
-                    "fakeSendIp": "22.22.22.22",
-                    "fakeSendPort": 80,
-                    "myPublicIp": "178.131.186.36",
-                    "maxDomainLen": 99,
-                    "maxSubLen": 63,
-                    "retries": 1
+                "network": "kcp",
+                "kcpSettings": {
+                    "mtu": 35,
+                    "tti": 200,
+                    "uplinkCapacity": 10,
+                    "downlinkCapacity": 50,
+                    "readBufferSize": 10,
+                    "writeBufferSize": 10
+                },
+                "finalmask": {
+                    "udp": [
+                        {
+                            "type": "qstunnel",
+                            "settings": {
+                                "domain": "t.psss.ir",
+                                "fakeSendIp": "22.22.22.22",
+                                "fakeSendPort": 80,
+                                "myPublicIp": "2.144.20.156",
+                                "maxDomainLen": 99,
+                                "maxSubLen": 63,
+                                "retries": 1
+                            }
+                        }
+                    ]
                 }
             }
         },
@@ -86,9 +78,7 @@
         "rules": [
             {
                 "type": "field",
-                "ip": [
-                    "geoip:private"
-                ],
+                "ip": ["geoip:private"],
                 "outboundTag": "direct"
             }
         ]

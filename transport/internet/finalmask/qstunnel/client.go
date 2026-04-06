@@ -1,7 +1,6 @@
 package qstunnel
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -31,41 +30,41 @@ type packet struct {
 	addr net.Addr
 }
 
-type qstunnelConnClient struct {
-	conn net.PacketConn // KCP's raw socket - used for sending DNS queries
-
-	// Receive infrastructure (separate socket for IP-spoofed responses)
-	recvSock *net.UDPConn
-
-	// Config
-	domain        []byte
+// clientHub is a singleton that owns the shared recvSock.
+// All WrapPacketConnClient calls share this hub.
+type clientHub struct {
+	recvSock      *net.UDPConn
+	sendSocks     []*net.UDPConn
+	sendIdx       int
+	readQueue     chan *packet
+	config        *Config
 	qnameEncoded  []byte
-	fakeSendIP    string
-	fakeSendPort  int
+	clientIDBytes []byte
+	chunkLen      int
 	maxDomainLen  int
 	maxSubLen     int
-	retries       int
-	chunkLen      int
-	clientIDBytes []byte
-	myPublicIP    string
-
-	// State
-	dataOffset      int
-	queryID         uint16
+	fakeSendPort  int
+	dataOffset    int
+	queryID       uint16
 	lastWanRecvTime atomic.Int64
-	dnsAddr         atomic.Pointer[net.Addr] // captured from first WriteTo
-
-	readQueue chan *packet
-	closed    bool
-	mu        sync.Mutex
+	mu            sync.Mutex
+	closed        bool
 }
 
-func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, error) {
-	if level != 0 {
-		return nil, errors.New("qstunnel requires being at the outermost level")
-	}
+var (
+	sharedHub     *clientHub
+	sharedHubOnce sync.Once
+	sharedHubErr  error
+)
 
-	// Defaults
+func getOrCreateClientHub(c *Config) (*clientHub, error) {
+	sharedHubOnce.Do(func() {
+		sharedHub, sharedHubErr = newClientHub(c)
+	})
+	return sharedHub, sharedHubErr
+}
+
+func newClientHub(c *Config) (*clientHub, error) {
 	maxDomainLen := int(c.MaxDomainLen)
 	if maxDomainLen == 0 {
 		maxDomainLen = 99
@@ -81,8 +80,11 @@ func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 	if fakeSendPort == 0 {
 		fakeSendPort = 443
 	}
+	sendSockCount := int(c.SendSockCount)
+	if sendSockCount == 0 {
+		sendSockCount = 512
+	}
 
-	// Generate random client ID to distinguish clients on the server
 	n, _ := rand.Int(rand.Reader, big.NewInt(1<<(5*clientIDWidth)))
 	clientIDBytes := numberToBase32Lower(int(n.Int64()), clientIDWidth)
 
@@ -98,159 +100,176 @@ func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 		return nil, errors.New("maxDomainLen too small to fit any data")
 	}
 
-	// Create receive socket for IP-spoofed responses
+	// ONE receive socket shared by ALL connections
 	recvConn, err := net.ListenPacket("udp4", "0.0.0.0:0")
 	if err != nil {
 		return nil, errors.New("failed to create receive socket").Base(err)
 	}
 	recvSock := recvConn.(*net.UDPConn)
 
-	// Resolve public IP if needed
+	// Multiple send sockets like Python
+	sendSocks := make([]*net.UDPConn, sendSockCount)
+	for i := range sendSocks {
+		sc, err := net.ListenPacket("udp4", "0.0.0.0:0")
+		if err != nil {
+			for j := 0; j < i; j++ {
+				sendSocks[j].Close()
+			}
+			recvSock.Close()
+			return nil, errors.New("failed to create send socket").Base(err)
+		}
+		sendSocks[i] = sc.(*net.UDPConn)
+	}
+
+	initOffset, _ := rand.Int(rand.Reader, big.NewInt(int64(totalDataOffsets)))
+	initQID, _ := rand.Int(rand.Reader, big.NewInt(65536))
+
 	myPublicIP := c.MyPublicIp
 	if myPublicIP == "" || myPublicIP == "auto" {
 		myPublicIP = "0.0.0.0"
 	}
 
-	// Random initial state
-	initOffset, _ := rand.Int(rand.Reader, big.NewInt(int64(totalDataOffsets)))
-	initQID, _ := rand.Int(rand.Reader, big.NewInt(65536))
-
-	client := &qstunnelConnClient{
-		conn:          raw,
+	h := &clientHub{
 		recvSock:      recvSock,
-		domain:        []byte(c.Domain),
+		sendSocks:     sendSocks,
+		readQueue:     make(chan *packet, 65536),
+		config:        c,
 		qnameEncoded:  qnameEncoded,
-		fakeSendIP:    c.FakeSendIp,
-		fakeSendPort:  fakeSendPort,
+		clientIDBytes: clientIDBytes,
+		chunkLen:      chunkLen,
 		maxDomainLen:  maxDomainLen,
 		maxSubLen:     maxSubLen,
-		retries:       int(c.Retries),
-		chunkLen:      chunkLen,
-		clientIDBytes: clientIDBytes,
-		myPublicIP:    myPublicIP,
+		fakeSendPort:  fakeSendPort,
 		dataOffset:    int(initOffset.Int64()),
 		queryID:       uint16(initQID.Int64()),
-		readQueue:     make(chan *packet, 512),
 	}
 
-	// Send initial NAT punch packets
+	// NAT punch
 	fakeAddr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", c.FakeSendIp, fakeSendPort))
 	if err == nil {
 		for i := 0; i < 3; i++ {
-			randData := make([]byte, 300)
+			rn, _ := rand.Int(rand.Reader, big.NewInt(243))
+			randData := make([]byte, 257+int(rn.Int64()))
 			rand.Read(randData)
 			recvSock.WriteTo(randData, fakeAddr)
+			time.Sleep(time.Millisecond)
 		}
 	}
 
-	go client.recvLoop()
-	go client.natKeepalive()
+	go h.recvLoop()
+	go h.natKeepalive()
 
-	return client, nil
+	return h, nil
 }
 
-// recvLoop reads IP-spoofed UDP packets arriving on recvSock.
-func (c *qstunnelConnClient) recvLoop() {
+func (h *clientHub) recvLoop() {
 	buf := make([]byte, 65536)
 	for {
-		if c.closed {
-			break
+		if h.closed {
+			return
 		}
-
-		n, addr, err := c.recvSock.ReadFrom(buf)
+		n, addr, err := h.recvSock.ReadFrom(buf)
 		if err != nil {
-			if c.closed {
-				break
+			if h.closed {
+				return
 			}
 			continue
 		}
-
 		if n == 0 {
 			continue
 		}
-
-		c.lastWanRecvTime.Store(time.Now().UnixMilli())
-
+		h.lastWanRecvTime.Store(time.Now().UnixMilli())
 		data := make([]byte, n)
 		copy(data, buf[:n])
-		select {
-		case c.readQueue <- &packet{p: data, addr: addr}:
-		default:
-			errors.LogDebug(context.Background(), "qstunnel client readQueue full")
-		}
+		h.readQueue <- &packet{p: data, addr: addr}
 	}
-
-	close(c.readQueue)
 }
 
-// natKeepalive sends periodic packets to maintain NAT binding on recvSock.
-func (c *qstunnelConnClient) natKeepalive() {
-	fakeAddr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", c.fakeSendIP, c.fakeSendPort))
+func (h *clientHub) natKeepalive() {
+	fakeAddr, err := net.ResolveUDPAddr("udp4", fmt.Sprintf("%s:%d", h.config.FakeSendIp, h.fakeSendPort))
 	if err != nil {
 		return
 	}
 	for {
-		if c.closed {
+		if h.closed {
 			return
 		}
 		time.Sleep(natKeepaliveInterval)
-		randData := make([]byte, 300)
+		rn, _ := rand.Int(rand.Reader, big.NewInt(243))
+		randData := make([]byte, 257+int(rn.Int64()))
 		rand.Read(randData)
-		c.recvSock.WriteTo(randData, fakeAddr)
+		h.recvSock.WriteTo(randData, fakeAddr)
 	}
 }
 
-// buildInfoPacket creates an info DNS query containing client connection info.
-func (c *qstunnelConnClient) buildInfoPacket() []byte {
-	recvPort := c.recvSock.LocalAddr().(*net.UDPAddr).Port
+func (h *clientHub) buildInfoPacket() []byte {
+	recvPort := h.recvSock.LocalAddr().(*net.UDPAddr).Port
 
-	pubIP := net.ParseIP(c.myPublicIP).To4()
+	pubIP := net.ParseIP(h.config.MyPublicIp).To4()
 	if pubIP == nil {
 		pubIP = net.IPv4zero.To4()
 	}
-	fakeIP := net.ParseIP(c.fakeSendIP).To4()
+	fakeIP := net.ParseIP(h.config.FakeSendIp).To4()
 	if fakeIP == nil {
 		fakeIP = net.IPv4zero.To4()
 	}
 
-	// Info payload: [4B pubIP][2B recvPort][4B fakeIP][2B fakePort]
 	info := make([]byte, 12)
 	copy(info[0:4], pubIP)
 	binary.BigEndian.PutUint16(info[4:6], uint16(recvPort))
 	copy(info[6:10], fakeIP)
-	binary.BigEndian.PutUint16(info[10:12], uint16(c.fakeSendPort))
+	binary.BigEndian.PutUint16(info[10:12], uint16(h.fakeSendPort))
 
 	infoEncoded := base32EncodeLower(info)
 
-	c.mu.Lock()
-	infoOffset := c.dataOffset
-	c.dataOffset = (c.dataOffset + 1) % totalDataOffsets
-	c.mu.Unlock()
+	h.mu.Lock()
+	infoOffset := h.dataOffset
+	h.dataOffset = (h.dataOffset + 1) % totalDataOffsets
+	qid := h.queryID
+	h.queryID++
+	h.mu.Unlock()
 
 	header := numberToBase32Lower(infoOffset, dataOffsetWidth)
-	payload := append([]byte{}, c.clientIDBytes...)
+	payload := append([]byte{}, h.clientIDBytes...)
 	payload = append(payload, header...)
-	payload = append(payload, '7', '8') // fragment_part=31 (base32 '7') + magic '8' => fragmentPart=31|32=63, notLast
+	payload = append(payload, '7', '8')
 	payload = append(payload, infoEncoded...)
 
-	domain := insertDots(payload, c.maxSubLen)
-	domain = append(domain, c.qnameEncoded...)
-
-	c.mu.Lock()
-	qid := c.queryID
-	c.queryID++
-	c.mu.Unlock()
+	domain := insertDots(payload, h.maxSubLen)
+	domain = append(domain, h.qnameEncoded...)
 
 	return buildDNSQuery(domain, qid, sendQueryType)
 }
 
+// qstunnelConnClient wraps a PacketConn. Each KCP dial gets one of these,
+// but they all share the same clientHub for recvSock.
+type qstunnelConnClient struct {
+	hub  *clientHub
+	conn net.PacketConn // KCP's raw socket, used for WriteTo destination addr
+}
+
+func NewConnClient(c *Config, raw net.PacketConn, level int) (net.PacketConn, error) {
+	if level != 0 {
+		return nil, errors.New("qstunnel requires being at the outermost level")
+	}
+
+	hub, err := getOrCreateClientHub(c)
+	if err != nil {
+		return nil, err
+	}
+
+	return &qstunnelConnClient{
+		hub:  hub,
+		conn: raw,
+	}, nil
+}
+
 func (c *qstunnelConnClient) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	pkt, ok := <-c.readQueue
+	pkt, ok := <-c.hub.readQueue
 	if !ok {
 		return 0, nil, net.ErrClosed
 	}
 	if len(p) < len(pkt.p) {
-		errors.LogDebug(context.Background(), "qstunnel client read short buffer")
 		return 0, pkt.addr, nil
 	}
 	copy(p, pkt.p)
@@ -265,49 +284,44 @@ func (c *qstunnelConnClient) WriteTo(p []byte, addr net.Addr) (n int, err error)
 		return 0, errors.New("packet too large")
 	}
 
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return 0, io.ErrClosedPipe
-	}
+	h := c.hub
 
-	dataOffset := c.dataOffset
-	c.dataOffset = (c.dataOffset + 1) % totalDataOffsets
-	qidBase := c.queryID
-	c.mu.Unlock()
+	h.mu.Lock()
+	dataOffset := h.dataOffset
+	h.dataOffset = (h.dataOffset + 1) % totalDataOffsets
+	qidBase := h.queryID
+	h.mu.Unlock()
 
-	// Fragment data into DNS query domains
-	domains := fragmentData(p, dataOffset, c.chunkLen, c.qnameEncoded, c.maxSubLen,
-		dataOffsetWidth, c.maxDomainLen+2, c.clientIDBytes)
+	domains := fragmentData(p, dataOffset, h.chunkLen, h.qnameEncoded, h.maxSubLen,
+		dataOffsetWidth, h.maxDomainLen+2, h.clientIDBytes)
 	if len(domains) == 0 {
 		return 0, errors.New("fragmentation failed")
 	}
 
-	// Check if we need to prepend info packet
 	var packets [][]byte
-	lastRecv := c.lastWanRecvTime.Load()
+	lastRecv := h.lastWanRecvTime.Load()
 	needInfo := lastRecv == 0 || time.Since(time.UnixMilli(lastRecv)) > infoSendThreshold
 	if needInfo {
-		packets = append(packets, c.buildInfoPacket())
+		packets = append(packets, h.buildInfoPacket())
 	}
 
-	// Build DNS queries for each fragment
-	c.mu.Lock()
+	h.mu.Lock()
 	qid := qidBase
 	for _, domain := range domains {
 		packets = append(packets, buildDNSQuery(domain, qid, sendQueryType))
 		qid++
 	}
-	c.queryID = qid
-	c.mu.Unlock()
+	h.queryID = qid
+	h.mu.Unlock()
 
-	// Send DNS queries via KCP's raw socket to the DNS server (addr = 1.1.1.1:53 from KCP dial)
-	for try := 0; try <= c.retries; try++ {
+	retries := int(h.config.Retries)
+	for try := 0; try <= retries; try++ {
 		for _, pkt := range packets {
-			_, err := c.conn.WriteTo(pkt, addr)
-			if err != nil {
-				errors.LogDebug(context.Background(), "qstunnel send error: ", err)
-			}
+			h.mu.Lock()
+			sock := h.sendSocks[h.sendIdx%len(h.sendSocks)]
+			h.sendIdx++
+			h.mu.Unlock()
+			sock.WriteTo(pkt, addr)
 		}
 	}
 
@@ -315,26 +329,25 @@ func (c *qstunnelConnClient) WriteTo(p []byte, addr net.Addr) (n int, err error)
 }
 
 func (c *qstunnelConnClient) Close() error {
-	c.mu.Lock()
-	c.closed = true
-	c.mu.Unlock()
-
-	c.recvSock.Close()
+	// Don't close the hub -- it's shared
 	return c.conn.Close()
 }
 
 func (c *qstunnelConnClient) LocalAddr() net.Addr {
-	return c.recvSock.LocalAddr()
+	return c.hub.recvSock.LocalAddr()
 }
 
 func (c *qstunnelConnClient) SetDeadline(t time.Time) error {
-	return c.recvSock.SetDeadline(t)
+	return nil
 }
 
 func (c *qstunnelConnClient) SetReadDeadline(t time.Time) error {
-	return c.recvSock.SetReadDeadline(t)
+	return nil
 }
 
 func (c *qstunnelConnClient) SetWriteDeadline(t time.Time) error {
-	return c.recvSock.SetWriteDeadline(t)
+	return nil
 }
+
+// Suppress unused import
+var _ = io.EOF

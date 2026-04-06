@@ -88,7 +88,7 @@ func NewConnServer(c *Config, raw net.PacketConn, level int) (net.PacketConn, er
 		recvDomains: recvDomains,
 		clientIDLen: clientIDLen,
 		clients:     make(map[string]*clientState),
-		readQueue:   make(chan *packet, 512),
+		readQueue:   make(chan *packet, 65536),
 	}
 
 	go server.recvLoop()
@@ -287,6 +287,8 @@ func labelsEqual(a [][]byte, b []string) bool {
 	return true
 }
 
+const maxUDPPayload = 1400
+
 // clientSendLoop sends data to a specific client via IP-spoofed UDP packets.
 func (s *qstunnelConnServer) clientSendLoop(clientKey string, cs *clientState) {
 	for data := range cs.writeQueue {
@@ -302,29 +304,34 @@ func (s *qstunnelConnServer) clientSendLoop(clientKey string, cs *clientState) {
 			continue
 		}
 
-		// Build IP-spoofed UDP packet
-		udpPayload := buildUDPPayloadV4(data, si.spoofSrcPort, si.clientPort, si.spoofSrcIP, si.clientIP)
+		// Split into MTU-safe chunks
+		for offset := 0; offset < len(data); offset += maxUDPPayload {
+			end := offset + maxUDPPayload
+			if end > len(data) {
+				end = len(data)
+			}
+			chunk := data[offset:end]
 
-		s.mu.Lock()
-		ipID := s.ipID
-		s.ipID++
-		s.mu.Unlock()
+			udpPayload := buildUDPPayloadV4(chunk, si.spoofSrcPort, si.clientPort, si.spoofSrcIP, si.clientIP)
 
-		ipHeader := buildIPv4Header(len(udpPayload), si.spoofSrcIP, si.clientIP, udpProto, 128, ipID, true)
+			s.mu.Lock()
+			ipID := s.ipID
+			s.ipID++
+			s.mu.Unlock()
 
-		pkt := make([]byte, len(ipHeader)+len(udpPayload))
-		copy(pkt, ipHeader)
-		copy(pkt[len(ipHeader):], udpPayload)
+			ipHeader := buildIPv4Header(len(udpPayload), si.spoofSrcIP, si.clientIP, udpProto, 128, ipID, true)
 
-		// Send via raw socket
-		var sa syscall.SockaddrInet4
-		copy(sa.Addr[:], si.clientIP[:])
-		sa.Port = int(si.clientPort)
+			pkt := make([]byte, len(ipHeader)+len(udpPayload))
+			copy(pkt, ipHeader)
+			copy(pkt[len(ipHeader):], udpPayload)
 
-		if err := syscall.Sendto(s.rawSockFd, pkt, 0, &sa); err != nil {
-			errors.LogWarning(context.Background(), "qstunnel raw send error: ", err, " to ", si.clientIPStr, ":", si.clientPort)
-		} else {
-			errors.LogDebug(context.Background(), "qstunnel: spoofed pkt sent to ", si.clientIPStr, ":", si.clientPort, " from ", net.IP(si.spoofSrcIP[:]).String(), ":", si.spoofSrcPort, " len=", len(data))
+			var sa syscall.SockaddrInet4
+			copy(sa.Addr[:], si.clientIP[:])
+			sa.Port = int(si.clientPort)
+
+			if err := syscall.Sendto(s.rawSockFd, pkt, 0, &sa); err != nil {
+				errors.LogDebug(context.Background(), "qstunnel: raw send error: ", err)
+			}
 		}
 	}
 }

@@ -14,6 +14,7 @@ message Config {
   uint32 max_domain_len = 6;          // Max encoded domain length (default 99)
   uint32 max_sub_len = 7;             // Max DNS label length (default 63)
   uint32 retries = 8;                 // Retry count per query
+  uint32 send_sock_count = 9;         // Number of UDP send sockets (default 512)
   string my_public_ip = 10;           // Client's public IP
 
   // Server-side fields
