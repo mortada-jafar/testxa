@@ -30,7 +30,7 @@ const (
 )
 
 // clientHub is a singleton shared by all connections from this client.
-// It owns the single recvSock for receiving IP-spoofed responses.
+// ONE recvSock, ONE readCh -- exactly like Python's wan_main_socket.
 type clientHub struct {
 	mu sync.Mutex
 
@@ -51,8 +51,8 @@ type clientHub struct {
 	queryID         uint16
 	lastWanRecvTime atomic.Int64
 
-	// Connection management
-	conns map[uint32]*qsConn // conv -> conn
+	// Single shared read channel -- like Python's wan_main_socket recv
+	readCh chan []byte
 	closed bool
 }
 
@@ -136,7 +136,7 @@ func newClientHub(c *Config) (*clientHub, error) {
 		maxSubLen:     maxSubLen,
 		dataOffset:    int(initOffset.Int64()),
 		queryID:       uint16(initQID.Int64()),
-		conns:         make(map[uint32]*qsConn),
+		readCh:        make(chan []byte, 1024),
 	}
 
 	// Send initial NAT punch (same as Python: 3 packets with random size 257-499)
@@ -161,7 +161,7 @@ func newClientHub(c *Config) (*clientHub, error) {
 	return h, nil
 }
 
-// recvLoop reads IP-spoofed responses and dispatches to the right connection.
+// recvLoop reads IP-spoofed responses into the single shared readCh.
 func (h *clientHub) recvLoop() {
 	buf := make([]byte, 65536)
 	for {
@@ -185,15 +185,10 @@ func (h *clientHub) recvLoop() {
 		data := make([]byte, n)
 		copy(data, buf[:n])
 
-		// Dispatch to all connections (KCP will filter by conv)
-		h.mu.Lock()
-		for _, conn := range h.conns {
-			select {
-			case conn.readCh <- data:
-			default:
-			}
+		select {
+		case h.readCh <- data:
+		default:
 		}
-		h.mu.Unlock()
 	}
 }
 
@@ -211,7 +206,6 @@ func (h *clientHub) natKeepalive() {
 			return
 		}
 		time.Sleep(natKeepaliveInterval)
-		// Random size 257-499, same as Python
 		rn, _ := rand.Int(rand.Reader, big.NewInt(243))
 		randData := make([]byte, 257+int(rn.Int64()))
 		rand.Read(randData)
@@ -262,7 +256,7 @@ func (h *clientHub) buildInfoPacket() []byte {
 	return buildDNSQuery(domain, qid, sendQueryType)
 }
 
-func (h *clientHub) sendData(data []byte, dest gonet.Addr, sendConn gonet.PacketConn) {
+func (h *clientHub) sendData(data []byte, dest gonet.Addr) {
 	h.mu.Lock()
 	dataOffset := h.dataOffset
 	h.dataOffset = (h.dataOffset + 1) % totalDataOffsets
@@ -275,7 +269,6 @@ func (h *clientHub) sendData(data []byte, dest gonet.Addr, sendConn gonet.Packet
 		return
 	}
 
-	// Check if info needed
 	var packets [][]byte
 	lastRecv := h.lastWanRecvTime.Load()
 	needInfo := lastRecv == 0 || time.Since(time.UnixMilli(lastRecv)) > infoSendThreshold
@@ -304,30 +297,18 @@ func (h *clientHub) sendData(data []byte, dest gonet.Addr, sendConn gonet.Packet
 	}
 }
 
-func (h *clientHub) addConn(conv uint32, c *qsConn) {
-	h.mu.Lock()
-	h.conns[conv] = c
-	h.mu.Unlock()
-}
-
-func (h *clientHub) removeConn(conv uint32) {
-	h.mu.Lock()
-	delete(h.conns, conv)
-	h.mu.Unlock()
-}
-
-// qsConn wraps a UDP connection to send data as DNS queries via the shared hub.
+// qsConn is a net.Conn that sends via DNS queries and reads from the shared hub.
 type qsConn struct {
-	hub      *clientHub
-	sendConn gonet.PacketConn // the underlying UDP socket for sending DNS queries
-	dest     *gonet.UDPAddr   // DNS resolver address
-	conv     uint32
-	readCh   chan []byte
-	closed   int32
+	hub    *clientHub
+	dest   *gonet.UDPAddr // DNS resolver address
+	closed int32
 }
 
 func (c *qsConn) Read(b []byte) (int, error) {
-	data, ok := <-c.readCh
+	if atomic.LoadInt32(&c.closed) != 0 {
+		return 0, io.EOF
+	}
+	data, ok := <-c.hub.readCh
 	if !ok {
 		return 0, io.EOF
 	}
@@ -339,16 +320,13 @@ func (c *qsConn) Write(b []byte) (int, error) {
 	if atomic.LoadInt32(&c.closed) != 0 {
 		return 0, io.ErrClosedPipe
 	}
-	c.hub.sendData(b, c.dest, c.sendConn)
+	c.hub.sendData(b, c.dest)
 	return len(b), nil
 }
 
 func (c *qsConn) Close() error {
-	if atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
-		c.hub.removeConn(c.conv)
-		close(c.readCh)
-	}
-	return c.sendConn.Close()
+	atomic.StoreInt32(&c.closed, 1)
+	return nil
 }
 
 func (c *qsConn) LocalAddr() gonet.Addr {
@@ -359,19 +337,9 @@ func (c *qsConn) RemoteAddr() gonet.Addr {
 	return c.dest
 }
 
-func (c *qsConn) SetDeadline(t time.Time) error {
-	return nil
-}
-
-func (c *qsConn) SetReadDeadline(t time.Time) error {
-	return nil
-}
-
-func (c *qsConn) SetWriteDeadline(t time.Time) error {
-	return nil
-}
-
-var globalConv uint32
+func (c *qsConn) SetDeadline(t time.Time) error      { return nil }
+func (c *qsConn) SetReadDeadline(t time.Time) error   { return nil }
+func (c *qsConn) SetWriteDeadline(t time.Time) error  { return nil }
 
 func DialQSTunnel(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (stat.Connection, error) {
 	config := streamSettings.ProtocolSettings.(*Config)
@@ -381,38 +349,17 @@ func DialQSTunnel(ctx context.Context, dest net.Destination, streamSettings *int
 		return nil, errors.New("failed to create client hub").Base(err)
 	}
 
-	// Create a UDP socket for sending DNS queries to the resolver
+	// Resolve DNS resolver address
 	dest.Network = net.Network_UDP
-	rawConn, err := internet.DialSystem(ctx, dest, streamSettings.SocketSettings)
-	if err != nil {
-		return nil, errors.New("failed to dial DNS resolver").Base(err)
+	destAddr := &gonet.UDPAddr{
+		IP:   dest.Address.IP(),
+		Port: int(dest.Port),
 	}
 
-	// Extract the PacketConn and dest addr
-	var sendConn gonet.PacketConn
-	var destAddr *gonet.UDPAddr
-
-	switch c := rawConn.(type) {
-	case *internet.PacketConnWrapper:
-		sendConn = c.PacketConn
-		destAddr = c.Dest.(*gonet.UDPAddr)
-	case *gonet.UDPConn:
-		sendConn = c
-		destAddr = c.RemoteAddr().(*gonet.UDPAddr)
-	default:
-		rawConn.Close()
-		return nil, errors.New("unsupported connection type")
-	}
-
-	conv := atomic.AddUint32(&globalConv, 1)
 	conn := &qsConn{
-		hub:      h,
-		sendConn: sendConn,
-		dest:     destAddr,
-		conv:     conv,
-		readCh:   make(chan []byte, 256),
+		hub:  h,
+		dest: destAddr,
 	}
-	h.addConn(conv, conn)
 
 	errors.LogInfo(ctx, "qstunnel: dialing via DNS to ", dest, " recvPort=", h.recvSock.LocalAddr())
 
