@@ -83,23 +83,21 @@ func (c *serverVConn) Write(b []byte) (int, error) {
 	sc, exists := c.listener.clients[c.clientID]
 	c.listener.mu.Unlock()
 	if !exists {
-		errors.LogDebug(context.Background(), "qstunnel: Write: client not found for ", c.clientID)
 		return 0, nil
 	}
 	if sc.sendInfo == nil {
-		errors.LogDebug(context.Background(), "qstunnel: Write: no sendInfo for client")
 		return 0, nil
 	}
 
-	errors.LogDebug(context.Background(), "qstunnel: Write len=", len(b), " to client=", sc.sendInfo.clientIPStr, ":", sc.sendInfo.clientPort)
+	// Add 4-byte length prefix so client can reassemble chunks
+	framed := make([]byte, 4+len(b))
+	binary.BigEndian.PutUint32(framed[0:4], uint32(len(b)))
+	copy(framed[4:], b)
 
-	buf := make([]byte, len(b))
-	copy(buf, b)
 	select {
-	case sc.writeQueue <- buf:
+	case sc.writeQueue <- framed:
 		return len(b), nil
 	default:
-		errors.LogDebug(context.Background(), "qstunnel: Write: writeQueue full")
 		return 0, nil
 	}
 }
