@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/kcp"
 )
 
 const (
@@ -56,7 +58,8 @@ type Listener struct {
 	addConn internet.ConnHandler
 
 	// Connection tracking
-	vconns map[string]*serverVConn // clientID -> virtual conn
+	vconns     map[string]*serverVConn // clientID -> virtual conn
+	convCounter uint32
 
 	closed bool
 }
@@ -130,6 +133,33 @@ func (c *serverVConn) RemoteAddr() gonet.Addr {
 func (c *serverVConn) SetDeadline(t time.Time) error      { return nil }
 func (c *serverVConn) SetReadDeadline(t time.Time) error   { return nil }
 func (c *serverVConn) SetWriteDeadline(t time.Time) error  { return nil }
+
+func serverFetchInput(input io.Reader, conn *kcp.Connection) {
+	reader := &kcp.KCPPacketReader{}
+	cache := make(chan *buf.Buffer, 1024)
+	go func() {
+		for {
+			payload := buf.New()
+			if _, err := payload.ReadFrom(input); err != nil {
+				payload.Release()
+				close(cache)
+				return
+			}
+			select {
+			case cache <- payload:
+			default:
+				payload.Release()
+			}
+		}
+	}()
+	for payload := range cache {
+		segments := reader.Read(payload.Bytes())
+		payload.Release()
+		if len(segments) > 0 {
+			conn.Input(segments)
+		}
+	}
+}
 
 func ListenQSTunnel(ctx context.Context, address net.Address, port net.Port, streamSettings *internet.MemoryStreamConfig, addConn internet.ConnHandler) (internet.Listener, error) {
 	config := streamSettings.ProtocolSettings.(*Config)
@@ -318,8 +348,19 @@ func (l *Listener) recvLoop() {
 				l.vconns[clientKey] = vc
 				l.mu.Unlock()
 
-				// Notify Xray of new connection
-				l.addConn(vc)
+				// Wrap with KCP for reliability and ordering
+				kcpConfig := &kcp.Config{}
+				conv := uint16(atomic.AddUint32(&l.convCounter, 1))
+				session := kcp.NewConnection(kcp.ConnMetadata{
+					LocalAddr:    vc.LocalAddr(),
+					RemoteAddr:   vc.RemoteAddr(),
+					Conversation: conv,
+				}, vc, vc, kcpConfig)
+
+				go serverFetchInput(vc, session)
+
+				// Notify Xray of new KCP-wrapped connection
+				l.addConn(session)
 			} else {
 				sc.mu.Lock()
 				sc.sendInfo = si

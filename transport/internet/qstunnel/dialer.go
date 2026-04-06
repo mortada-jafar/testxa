@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/kcp"
 	"github.com/xtls/xray-core/transport/internet/stat"
 )
 
@@ -348,6 +350,35 @@ func (c *qsConn) SetDeadline(t time.Time) error      { return nil }
 func (c *qsConn) SetReadDeadline(t time.Time) error   { return nil }
 func (c *qsConn) SetWriteDeadline(t time.Time) error  { return nil }
 
+func fetchInput(ctx context.Context, input io.Reader, reader kcp.PacketReader, conn *kcp.Connection) {
+	cache := make(chan *buf.Buffer, 1024)
+	go func() {
+		for {
+			payload := buf.New()
+			if _, err := payload.ReadFrom(input); err != nil {
+				payload.Release()
+				close(cache)
+				return
+			}
+			select {
+			case cache <- payload:
+			default:
+				payload.Release()
+			}
+		}
+	}()
+
+	for payload := range cache {
+		segments := reader.Read(payload.Bytes())
+		payload.Release()
+		if len(segments) > 0 {
+			conn.Input(segments)
+		}
+	}
+}
+
+var globalConv uint32
+
 func DialQSTunnel(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (stat.Connection, error) {
 	config := streamSettings.ProtocolSettings.(*Config)
 
@@ -363,14 +394,27 @@ func DialQSTunnel(ctx context.Context, dest net.Destination, streamSettings *int
 		Port: int(dest.Port),
 	}
 
-	conn := &qsConn{
+	rawConn := &qsConn{
 		hub:  h,
 		dest: destAddr,
 	}
 
 	errors.LogInfo(ctx, "qstunnel: dialing via DNS to ", dest, " recvPort=", h.recvSock.LocalAddr())
 
-	return conn, nil
+	// Wrap with KCP for reliability and ordering
+	kcpConfig := &kcp.Config{}
+
+	conv := uint16(atomic.AddUint32(&globalConv, 1))
+	session := kcp.NewConnection(kcp.ConnMetadata{
+		LocalAddr:    rawConn.LocalAddr(),
+		RemoteAddr:   rawConn.RemoteAddr(),
+		Conversation: conv,
+	}, rawConn, rawConn, kcpConfig)
+
+	reader := &kcp.KCPPacketReader{}
+	go fetchInput(ctx, rawConn, reader, session)
+
+	return session, nil
 }
 
 func init() {
