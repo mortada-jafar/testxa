@@ -372,11 +372,15 @@ func labelsEqual(a [][]byte, b []string) bool {
 	return true
 }
 
-// maxUDPPayload is the max data per spoofed UDP packet (MTU safe)
-const maxUDPPayload = 1400
+// maxUDPPayload is the max data per spoofed UDP packet (MTU safe, minus 8 bytes for our header)
+const maxUDPPayload = 1392
+
+// spoofed packet header: [4B msgID][2B seqNum][2B totalChunks]
+const chunkHeaderSize = 8
 
 // clientSendLoop sends data back to a client via IP-spoofed UDP.
 func (l *Listener) clientSendLoop(clientKey string, sc *serverClient) {
+	var msgID uint32
 	for data := range sc.writeQueue {
 		if l.closed {
 			return
@@ -390,15 +394,28 @@ func (l *Listener) clientSendLoop(clientKey string, sc *serverClient) {
 			continue
 		}
 
-		// Send each chunk as a separate UDP packet
-		for offset := 0; offset < len(data); offset += maxUDPPayload {
-			end := offset + maxUDPPayload
+		msgID++
+		totalChunks := (len(data) + maxUDPPayload - 1) / maxUDPPayload
+		if totalChunks == 0 {
+			totalChunks = 1
+		}
+
+		for i := 0; i < totalChunks; i++ {
+			start := i * maxUDPPayload
+			end := start + maxUDPPayload
 			if end > len(data) {
 				end = len(data)
 			}
-			chunk := data[offset:end]
+			chunk := data[start:end]
 
-			udpPayload := buildUDPPayloadV4(chunk, si.spoofSrcPort, si.clientPort, si.spoofSrcIP, si.clientIP)
+			// Prepend header: [4B msgID][2B seqNum][2B totalChunks]
+			framed := make([]byte, chunkHeaderSize+len(chunk))
+			binary.BigEndian.PutUint32(framed[0:4], msgID)
+			binary.BigEndian.PutUint16(framed[4:6], uint16(i))
+			binary.BigEndian.PutUint16(framed[6:8], uint16(totalChunks))
+			copy(framed[chunkHeaderSize:], chunk)
+
+			udpPayload := buildUDPPayloadV4(framed, si.spoofSrcPort, si.clientPort, si.spoofSrcIP, si.clientIP)
 
 			l.mu.Lock()
 			ipID := l.ipID

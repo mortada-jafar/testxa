@@ -294,34 +294,117 @@ func (h *clientHub) sendData(data []byte, dest gonet.Addr) {
 	}
 }
 
+// pendingMsg holds chunks for a message being reassembled
+type pendingMsg struct {
+	chunks     [][]byte
+	received   int
+	total      int
+}
+
 // qsConn is a net.Conn that sends via DNS queries and reads from the shared hub.
 type qsConn struct {
 	hub     *clientHub
 	dest    *gonet.UDPAddr // DNS resolver address
 	closed  int32
-	pending []byte // leftover data from previous Read
+
+	// Reassembly state
+	pending    []byte                // leftover data from previous Read
+	messages   map[uint32]*pendingMsg // msgID -> pending chunks
+	nextMsgID  uint32                // next expected message ID
+	readyQueue [][]byte              // fully assembled messages ready to deliver
 }
 
 func (c *qsConn) Read(b []byte) (int, error) {
-	// Return leftover data first
-	if len(c.pending) > 0 {
-		n := copy(b, c.pending)
-		c.pending = c.pending[n:]
-		return n, nil
-	}
+	for {
+		// Return leftover data first
+		if len(c.pending) > 0 {
+			n := copy(b, c.pending)
+			c.pending = c.pending[n:]
+			return n, nil
+		}
 
-	if atomic.LoadInt32(&c.closed) != 0 {
-		return 0, io.EOF
+		// Check if we have assembled messages ready
+		if len(c.readyQueue) > 0 {
+			data := c.readyQueue[0]
+			c.readyQueue = c.readyQueue[1:]
+			n := copy(b, data)
+			if n < len(data) {
+				c.pending = data[n:]
+			}
+			return n, nil
+		}
+
+		// Read a chunk from the hub
+		if atomic.LoadInt32(&c.closed) != 0 {
+			return 0, io.EOF
+		}
+		raw, ok := <-c.hub.readCh
+		if !ok {
+			return 0, io.EOF
+		}
+
+		// Parse header: [4B msgID][2B seqNum][2B totalChunks]
+		if len(raw) < chunkHeaderSize {
+			continue // too short, skip
+		}
+		msgID := binary.BigEndian.Uint32(raw[0:4])
+		seqNum := int(binary.BigEndian.Uint16(raw[4:6]))
+		totalChunks := int(binary.BigEndian.Uint16(raw[6:8]))
+		chunkData := raw[chunkHeaderSize:]
+
+		if totalChunks == 1 {
+			// Single chunk message -- deliver immediately, no reassembly needed
+			if msgID >= c.nextMsgID {
+				c.nextMsgID = msgID + 1
+			}
+			n := copy(b, chunkData)
+			if n < len(chunkData) {
+				c.pending = chunkData[n:]
+			}
+			return n, nil
+		}
+
+		// Multi-chunk message -- reassemble
+		if c.messages == nil {
+			c.messages = make(map[uint32]*pendingMsg)
+		}
+
+		pm, exists := c.messages[msgID]
+		if !exists {
+			pm = &pendingMsg{
+				chunks: make([][]byte, totalChunks),
+				total:  totalChunks,
+			}
+			c.messages[msgID] = pm
+		}
+
+		if seqNum < pm.total && pm.chunks[seqNum] == nil {
+			pm.chunks[seqNum] = chunkData
+			pm.received++
+		}
+
+		if pm.received == pm.total {
+			// All chunks received -- assemble
+			var assembled []byte
+			for _, chunk := range pm.chunks {
+				assembled = append(assembled, chunk...)
+			}
+			delete(c.messages, msgID)
+
+			// Clean up old incomplete messages
+			for id := range c.messages {
+				if id < msgID {
+					delete(c.messages, id)
+				}
+			}
+
+			n := copy(b, assembled)
+			if n < len(assembled) {
+				c.pending = assembled[n:]
+			}
+			return n, nil
+		}
 	}
-	data, ok := <-c.hub.readCh
-	if !ok {
-		return 0, io.EOF
-	}
-	n := copy(b, data)
-	if n < len(data) {
-		c.pending = data[n:]
-	}
-	return n, nil
 }
 
 func (c *qsConn) Write(b []byte) (int, error) {
