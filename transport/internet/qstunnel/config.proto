@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package xray.transport.internet.qstunnel;
+option csharp_namespace = "Xray.Transport.Internet.Qstunnel";
+option go_package = "github.com/xtls/xray-core/transport/internet/qstunnel";
+option java_package = "com.xray.transport.internet.qstunnel";
+option java_multiple_files = true;
+
+message Config {
+  // Client-side
+  string domain = 1;               // DNS domain suffix for encoding data
+  string fake_send_ip = 2;         // Spoofed source IP for download responses
+  uint32 fake_send_port = 3;       // Spoofed source port (default 443)
+  uint32 max_domain_len = 4;       // Max encoded domain length (default 253)
+  uint32 max_sub_len = 5;          // Max DNS label length (default 63)
+  string my_public_ip = 6;         // Client's public IP
+  uint32 retries = 7;              // Retry count per send
+  uint32 send_sock_count = 9;      // Number of UDP send sockets (default 512)
+
+  // Server-side
+  repeated string recv_domains = 8; // Accepted domain suffixes
+}

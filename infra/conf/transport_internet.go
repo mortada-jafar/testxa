@@ -32,7 +32,7 @@ import (
 	"github.com/xtls/xray-core/transport/internet/finalmask/noise"
 	"github.com/xtls/xray-core/transport/internet/finalmask/salamander"
 	finalsudoku "github.com/xtls/xray-core/transport/internet/finalmask/sudoku"
-	"github.com/xtls/xray-core/transport/internet/finalmask/qstunnel"
+	"github.com/xtls/xray-core/transport/internet/qstunnel"
 	"github.com/xtls/xray-core/transport/internet/finalmask/xdns"
 	"github.com/xtls/xray-core/transport/internet/finalmask/xicmp"
 	"github.com/xtls/xray-core/transport/internet/httpupgrade"
@@ -1013,6 +1013,8 @@ func (p TransportProtocol) Build() (string, error) {
 		return "", errors.PrintRemovedFeatureError("QUIC transport (without web service, etc.)", "XHTTP stream-one H3")
 	case "hysteria":
 		return "hysteria", nil
+	case "qstunnel":
+		return "qstunnel", nil
 	default:
 		return "", errors.New("Config: unknown transport protocol: ", p)
 	}
@@ -1251,7 +1253,6 @@ var (
 		"sudoku":           func() interface{} { return new(Sudoku) },
 		"xdns":             func() interface{} { return new(Xdns) },
 		"xicmp":            func() interface{} { return new(Xicmp) },
-		"qstunnel":         func() interface{} { return new(QSTunnel) },
 	}, "type", "settings")
 )
 
@@ -1640,27 +1641,29 @@ func (c *Xicmp) Build() (proto.Message, error) {
 	return config, nil
 }
 
-type QSTunnel struct {
-	Domain       string   `json:"domain"`
-	FakeSendIp   string   `json:"fakeSendIp"`
-	FakeSendPort uint32   `json:"fakeSendPort"`
-	MaxDomainLen uint32   `json:"maxDomainLen"`
-	MaxSubLen    uint32   `json:"maxSubLen"`
-	Retries      uint32   `json:"retries"`
-	MyPublicIp   string   `json:"myPublicIp"`
-	RecvDomains  []string `json:"recvDomains"`
+type QSTunnelConfig struct {
+	Domain        string   `json:"domain"`
+	FakeSendIp    string   `json:"fakeSendIp"`
+	FakeSendPort  uint32   `json:"fakeSendPort"`
+	MaxDomainLen  uint32   `json:"maxDomainLen"`
+	MaxSubLen     uint32   `json:"maxSubLen"`
+	Retries       uint32   `json:"retries"`
+	SendSockCount uint32   `json:"sendSockCount"`
+	MyPublicIp    string   `json:"myPublicIp"`
+	RecvDomains   []string `json:"recvDomains"`
 }
 
-func (c *QSTunnel) Build() (proto.Message, error) {
+func (c *QSTunnelConfig) Build() (proto.Message, error) {
 	return &qstunnel.Config{
-		Domain:       c.Domain,
-		FakeSendIp:   c.FakeSendIp,
-		FakeSendPort: c.FakeSendPort,
-		MaxDomainLen: c.MaxDomainLen,
-		MaxSubLen:    c.MaxSubLen,
-		Retries:      c.Retries,
-		MyPublicIp:   c.MyPublicIp,
-		RecvDomains:  c.RecvDomains,
+		Domain:        c.Domain,
+		FakeSendIp:    c.FakeSendIp,
+		FakeSendPort:  c.FakeSendPort,
+		MaxDomainLen:  c.MaxDomainLen,
+		MaxSubLen:     c.MaxSubLen,
+		Retries:       c.Retries,
+		SendSockCount: c.SendSockCount,
+		MyPublicIp:    c.MyPublicIp,
+		RecvDomains:   c.RecvDomains,
 	}, nil
 }
 
@@ -1713,6 +1716,7 @@ type StreamConfig struct {
 	WSSettings          *WebSocketConfig   `json:"wsSettings"`
 	HTTPUPGRADESettings *HttpUpgradeConfig `json:"httpupgradeSettings"`
 	HysteriaSettings    *HysteriaConfig    `json:"hysteriaSettings"`
+	QSTunnelSettings    *QSTunnelConfig    `json:"qstunnelSettings"`
 	SocketSettings      *SocketConfig      `json:"sockopt"`
 }
 
@@ -1841,6 +1845,16 @@ func (c *StreamConfig) Build() (*internet.StreamConfig, error) {
 		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
 			ProtocolName: "hysteria",
 			Settings:     serial.ToTypedMessage(hs),
+		})
+	}
+	if c.QSTunnelSettings != nil {
+		qs, err := c.QSTunnelSettings.Build()
+		if err != nil {
+			return nil, errors.New("Failed to build QSTunnel config.").Base(err)
+		}
+		config.TransportSettings = append(config.TransportSettings, &internet.TransportConfig{
+			ProtocolName: "qstunnel",
+			Settings:     serial.ToTypedMessage(qs),
 		})
 	}
 	if c.SocketSettings != nil {

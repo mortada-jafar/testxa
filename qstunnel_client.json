@@ -13,10 +13,7 @@
             },
             "sniffing": {
                 "enabled": true,
-                "destOverride": [
-                    "http",
-                    "tls"
-                ]
+                "destOverride": ["http", "tls"]
             },
             "tag": "socks"
         }
@@ -28,7 +25,7 @@
             "settings": {
                 "vnext": [
                     {
-                        "address": "10.185.68.113",
+                        "address": "2.144.7.39",
                         "port": 53,
                         "users": [
                             {
@@ -40,27 +37,15 @@
                 ]
             },
             "streamSettings": {
-                "network": "kcp",
-                "kcpSettings": {
-                    "mtu": 35,
-                    "tti": 200,
-                    "uplinkCapacity": 10,
-                    "downlinkCapacity": 50,
-                    "readBufferSize": 10,
-                    "writeBufferSize": 10
-                },
-                "finalmask": {
-                    "udp": [
-                        {
-                            "type": "qstunnel",
-                            "settings": {
-                                "domain": "t.psss.ir",
-                                "fakeSendIp": "213.176.6.219",
-                                "fakeSendPort": 443,
-                                "myPublicIp": "83.123.100.30"
-                            }
-                        }
-                    ]
+                "network": "qstunnel",
+                "qstunnelSettings": {
+                    "domain": "t.psss.ir",
+                    "fakeSendIp": "87.107.139.2",
+                    "fakeSendPort": 443,
+                    "myPublicIp": "178.131.186.36",
+                    "maxDomainLen": 99,
+                    "maxSubLen": 63,
+                    "retries": 1
                 }
             }
         },
@@ -78,9 +63,7 @@
         "rules": [
             {
                 "type": "field",
-                "ip": [
-                    "geoip:private"
-                ],
+                "ip": ["geoip:private"],
                 "outboundTag": "direct"
             }
         ]
