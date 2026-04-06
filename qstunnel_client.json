@@ -1,24 +1,44 @@
 {
     "log": {
-        "loglevel": "debug"
+        "loglevel": "debug",
+        "access": "none"
+    },
+    "policy": {
+        "levels": {
+            "0": {
+                "uplinkOnly": 0,
+                "downlinkOnly": 0
+            }
+        }
+    },
+    "dns": {
+        "servers": [
+            "fakedns"
+        ]
     },
     "inbounds": [
         {
+            "tag": "mixed-in",
             "listen": "127.0.0.1",
             "port": 10808,
-            "protocol": "socks",
-            "settings": {
-                "auth": "noauth",
-                "udp": true
-            },
+            "protocol": "mixed",
             "sniffing": {
                 "enabled": true,
                 "destOverride": [
-                    "http",
-                    "tls"
-                ]
+                    "fakedns"
+                ],
+                "routeOnly": false
             },
-            "tag": "socks"
+            "settings": {
+                "udp": true,
+                "ip": "127.0.0.1"
+            },
+            "streamSettings": {
+                "sockopt": {
+                    "tcpKeepAliveInterval": 1,
+                    "tcpKeepAliveIdle": 11
+                }
+            }
         }
     ],
     "outbounds": [
@@ -28,8 +48,8 @@
             "settings": {
                 "vnext": [
                     {
-                        "address": "1.1.1.1",
-                        "port": 53,
+                        "address": "2.144.7.39",
+                        "port": 2086,
                         "users": [
                             {
                                 "id": "18947b04-60a2-4a39-b880-5fbab17b84b2",
@@ -43,11 +63,11 @@
                 "network": "qstunnel",
                 "qstunnelSettings": {
                     "domain": "t.psss.ir",
-                    "fakeSendIp": "87.107.139.2",
+                    "fakeSendIp": "146.70.104.252",
                     "fakeSendPort": 443,
-                    "myPublicIp": "185.247.116.231",
-                    "maxDomainLen": 99,
-                    "maxSubLen": 63,
+                    "myPublicIp": "178.131.186.36",
+                    "maxDomainLen": 60,
+                    "maxSubLen": 50,
                     "retries": 1
                 }
             }

@@ -182,12 +182,15 @@ func (h *clientHub) recvLoop() {
 
 		h.lastWanRecvTime.Store(time.Now().UnixMilli())
 
+		errors.LogInfo(context.Background(), "qstunnel client: RECEIVED spoofed pkt len=", n)
+
 		data := make([]byte, n)
 		copy(data, buf[:n])
 
 		select {
 		case h.readCh <- data:
 		default:
+			errors.LogDebug(context.Background(), "qstunnel client: readCh full, dropped")
 		}
 	}
 }

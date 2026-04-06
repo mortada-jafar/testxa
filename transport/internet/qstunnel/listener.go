@@ -82,9 +82,16 @@ func (c *serverVConn) Write(b []byte) (int, error) {
 	c.listener.mu.Lock()
 	sc, exists := c.listener.clients[c.clientID]
 	c.listener.mu.Unlock()
-	if !exists || sc.sendInfo == nil {
-		return 0, nil // no send info yet, drop
+	if !exists {
+		errors.LogDebug(context.Background(), "qstunnel: Write: client not found for ", c.clientID)
+		return 0, nil
 	}
+	if sc.sendInfo == nil {
+		errors.LogDebug(context.Background(), "qstunnel: Write: no sendInfo for client")
+		return 0, nil
+	}
+
+	errors.LogDebug(context.Background(), "qstunnel: Write len=", len(b), " to client=", sc.sendInfo.clientIPStr, ":", sc.sendInfo.clientPort)
 
 	buf := make([]byte, len(b))
 	copy(buf, b)
@@ -92,6 +99,7 @@ func (c *serverVConn) Write(b []byte) (int, error) {
 	case sc.writeQueue <- buf:
 		return len(b), nil
 	default:
+		errors.LogDebug(context.Background(), "qstunnel: Write: writeQueue full")
 		return 0, nil
 	}
 }
@@ -401,6 +409,7 @@ func (l *Listener) clientSendLoop(clientKey string, sc *serverClient) {
 		copy(sa.Addr[:], si.clientIP[:])
 		sa.Port = int(si.clientPort)
 
+		errors.LogDebug(context.Background(), "qstunnel: spoofing pkt len=", len(data), " to ", si.clientIPStr, ":", si.clientPort, " from ", gonet.IP(si.spoofSrcIP[:]).String(), ":", si.spoofSrcPort)
 		if err := syscall.Sendto(l.rawSockFd, pkt, 0, &sa); err != nil {
 			errors.LogDebug(context.Background(), "qstunnel: raw send error: ", err)
 		}
